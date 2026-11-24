@@ -78,7 +78,7 @@ public class DoubleTapDetectorTest {
     }
 
     @Test
-    public void farApartTapsAndCancelDoNotTrigger() {
+    public void farApartTapsDoNotTrigger() {
         DoubleTapDetector detector = detector();
         Clock clock = new Clock();
 
@@ -86,11 +86,28 @@ public class DoubleTapDetectorTest {
         assertFalse(tap(detector, clock, 900f, 2540f, true, 120));
 
         clock.now += 400;
-        assertFalse(detector.onEvent(MotionEvent.ACTION_DOWN, clock.now, 600f, 2540f, 1, true));
-        clock.now += 20;
-        assertFalse(detector.onEvent(MotionEvent.ACTION_CANCEL, clock.now, 600f, 2540f, 1, true));
-        clock.now += 400;
         assertFalse(tap(detector, clock, 600f, 2540f, true, 120));
+    }
+
+    @Test
+    public void cancelInsertedBySystemDoesNotSwallowTheUp() {
+        DoubleTapDetector detector = detector();
+        // 桌面的手势识别会向部分事件流插入 CANCEL；CANCEL 本身即可视为释放，
+        // 同一触摸后续到达的 UP 不会重复计数。
+        assertFalse(detector.onEvent(MotionEvent.ACTION_DOWN, 1000L, 600f, 2540f, 1, true));
+        assertFalse(detector.onEvent(MotionEvent.ACTION_CANCEL, 1000L, 600f, 2540f, 1, true));
+        assertFalse(detector.onEvent(MotionEvent.ACTION_UP, 1080L, 600f, 2540f, 1, true));
+        assertFalse(detector.onEvent(MotionEvent.ACTION_DOWN, 1200L, 600f, 2540f, 1, true));
+        assertTrue(detector.onEvent(MotionEvent.ACTION_UP, 1280L, 600f, 2540f, 1, true));
+    }
+
+    @Test
+    public void cancelWithoutUpStillCompletesTheTap() {
+        DoubleTapDetector detector = detector();
+        assertFalse(detector.onEvent(MotionEvent.ACTION_DOWN, 1000L, 600f, 2540f, 1, true));
+        assertFalse(detector.onEvent(MotionEvent.ACTION_CANCEL, 1040L, 600f, 2540f, 1, true));
+        assertFalse(detector.onEvent(MotionEvent.ACTION_DOWN, 1200L, 600f, 2540f, 1, true));
+        assertTrue(detector.onEvent(MotionEvent.ACTION_CANCEL, 1240L, 600f, 2540f, 1, true));
     }
 
     @Test

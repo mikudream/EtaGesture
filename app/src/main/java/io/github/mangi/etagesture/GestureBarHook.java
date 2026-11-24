@@ -1,8 +1,6 @@
 package io.github.mangi.etagesture;
 
-import android.app.KeyguardManager;
 import android.content.Context;
-import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.Resources;
 import android.os.Handler;
@@ -18,18 +16,23 @@ import android.view.WindowManager;
 import android.view.WindowMetrics;
 
 import java.lang.reflect.Method;
+import java.util.WeakHashMap;
 
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 
 /**
- * 手势条双击 → 唤出 Eta 助手浮窗。
+ * 手势条双击 → 唤出 Eta 助手浮窗（system_server 侧）。
  *
- * HyperOS 4 的手势条触摸由桌面原生手势运行时分发（`dumpsys input` 里
- * `[Gesture Monitor] swipe-up` 属于 `com.miui.home`，桌面 Java 导航视图拿不到事件，
- * 模块也无法注入桌面进程）。这里改为在 SystemUI 中旁路观察同一路输入：
- * 只挂钩 `InputEventReceiver.dispatchInputEvent`，不创建额外输入监听、不改事件分发、
- * 不消费任何触摸，只在底部手势条区域识别双击后启动 Eta 的 ASSIST 桥接 Activity。
+ * HyperOS 4 的手势条触摸由桌面原生手势运行时与 system_server 的手势监视器共同处理：
+ * `dumpsys input` 里 `[Gesture Monitor] swipe-up` 属于 `com.miui.home`，
+ * `[Gesture Monitor] miui-gesture` / `vibrator-input` 属于 system_server，均为覆盖全屏的
+ * SPY 监视器。这里只挂钩框架的 `InputEventReceiver.dispatchInputEvent`，旁路观察
+ * system_server 自己那几个常驻监视器的输入，不创建监听、不消费事件。
+ *
+ * 同一物理触摸会同时投递给多个 receiver，而桌面的手势识别可能只向其中一个流发送 CANCEL。
+ * 因此每个 receiver 维护独立的手势状态，任一干净事件流识别出双击即可；触发后做短时冷却，
+ * 避免多个流重复唤起。
  */
 public final class GestureBarHook {
     private GestureBarHook() {
@@ -55,7 +58,7 @@ public final class GestureBarHook {
                 .intercept(chain -> {
                     Object argument = chain.getArg(1);
                     if (argument instanceof MotionEvent) {
-                        Monitor.onInput((MotionEvent) argument);
+                        Monitor.onInput((MotionEvent) argument, chain.getThisObject());
                     }
                     return chain.proceed();
                 });
@@ -77,7 +80,7 @@ public final class GestureBarHook {
         }
     }
 
-    /** 悬浮条区域内的双击观察者；状态只在输入回调内串行更新。 */
+    /** 手势条区域内的双击观察者；每个 receiver 一个独立事件流状态。 */
     private static final class Monitor {
         private static final Object LOCK = new Object();
         private static final Handler MAIN = new Handler(Looper.getMainLooper());
@@ -90,19 +93,7 @@ public final class GestureBarHook {
         private static Context context;
         private static Geometry geometry;
         private static Boolean gestureNavigation;
-        private static DoubleTapDetector detector;
-        private static long lastEventTime = Long.MIN_VALUE;
-        private static final int RECENT_EVENTS = 12;
-        private static final long[] recentTimes = new long[RECENT_EVENTS];
-        private static final int[] recentActions = new int[RECENT_EVENTS];
-        private static final int[] recentXBits = new int[RECENT_EVENTS];
-        private static final int[] recentYBits = new int[RECENT_EVENTS];
-        private static int recentIndex;
-        private static int recentCount;
-
-        static {
-            java.util.Arrays.fill(recentTimes, Long.MIN_VALUE);
-        }
+        private static final WeakHashMap<Object, StreamState> streams = new WeakHashMap<>();
         private static long lastTriggerUptime;
         private static boolean loggedFirstTouch;
         private static boolean loggedMissingContext;
@@ -117,7 +108,7 @@ public final class GestureBarHook {
             }
         }
 
-        static void onInput(MotionEvent event) {
+        static void onInput(MotionEvent event, Object receiver) {
             if (!event.isFromSource(InputDevice.SOURCE_TOUCHSCREEN)) {
                 return;
             }
@@ -128,52 +119,51 @@ public final class GestureBarHook {
                     && action != MotionEvent.ACTION_POINTER_UP) {
                 return;
             }
+
             synchronized (LOCK) {
-                // SystemUI 可能同时持有多个 observe-only 输入通道，同一事件会重复到达且可能乱序：
-                // 先用事件时间水位线丢弃滞后副本，再比对同毫秒内的完整签名。
-                if (isStaleOrDuplicate(event)) {
-                    return;
-                }
-                if (preferences != null
-                        && !preferences.getBoolean(Constants.KEY_ENABLED, true)) {
-                    return;
-                }
+                // 输入事件是全系统最热的路径：先用手势条几何做一次廉价过滤，非底部触摸直接返回。
                 Context current = context;
                 if (current == null) {
                     current = resolveContext();
                     if (current == null) {
                         if (!loggedMissingContext) {
                             loggedMissingContext = true;
-                            log(module, "缺少 SystemUI Context，无法读取手势区域", null);
+                            log(module, "缺少 system_server Context，无法读取手势区域", null);
                         }
                         return;
                     }
                     context = current;
                 }
-                if (!isGestureNavigation(current) || isKeyguardLocked(current)) {
-                    if (detector != null) {
-                        detector.reset();
-                    }
+                Geometry area = gestureBarArea(current);
+                if (area == null || event.getRawY() < area.top) {
                     return;
                 }
-                Geometry area = gestureBarArea(current);
-                if (area == null) {
+                if (preferences != null
+                        && !preferences.getBoolean(Constants.KEY_ENABLED, true)) {
+                    return;
+                }
+                if (!isGestureNavigation(current) || isKeyguardLocked(current)) {
                     return;
                 }
                 if (!loggedFirstTouch) {
                     loggedFirstTouch = true;
                     log(module, "手势条输入监听已生效", null);
                 }
-                if (detector == null) {
-                    detector = createDetector(current);
+                StreamState state = streams.get(receiver);
+                if (state == null) {
+                    state = new StreamState(createDetector(current));
+                    streams.put(receiver, state);
                 }
-                boolean triggered = detector.onEvent(
+                if (state.isDuplicate(event)) {
+                    return;
+                }
+                boolean triggered = state.detector.onEvent(
                         action,
                         event.getEventTime(),
                         event.getRawX(),
                         event.getRawY(),
                         event.getPointerCount(),
-                        event.getRawY() >= area.top);
+                        true);
                 if (!triggered) {
                     return;
                 }
@@ -184,47 +174,23 @@ public final class GestureBarHook {
                 lastTriggerUptime = now;
                 log(module, "手势条双击，唤出 Eta 助手浮窗", null);
                 Context launchContext = current;
-                MAIN.post(() -> launchEta(launchContext));
+                MAIN.post(() -> EtaWake.launch(launchContext, module));
             }
-        }
-
-        private static boolean isStaleOrDuplicate(MotionEvent event) {
-            long time = event.getEventTime();
-            int action = event.getActionMasked();
-            int xBits = Float.floatToRawIntBits(event.getRawX());
-            int yBits = Float.floatToRawIntBits(event.getRawY());
-            // 滞后于当前水位线的副本直接丢弃。
-            if (time < lastEventTime) {
-                return true;
-            }
-            // 同一事件会被多个 observe-only 通道各投递一次，可能乱序到达；
-            // 用一个小环记录最近事件的完整签名，命中即视为副本。
-            for (int i = 0; i < recentCount; i++) {
-                if (recentTimes[i] == time && recentActions[i] == action
-                        && recentXBits[i] == xBits && recentYBits[i] == yBits) {
-                    return true;
-                }
-            }
-            recentTimes[recentIndex] = time;
-            recentActions[recentIndex] = action;
-            recentXBits[recentIndex] = xBits;
-            recentYBits[recentIndex] = yBits;
-            recentIndex = (recentIndex + 1) % RECENT_EVENTS;
-            if (recentCount < RECENT_EVENTS) {
-                recentCount++;
-            }
-            lastEventTime = time;
-            return false;
         }
 
         private static Context resolveContext() {
             try {
                 Class<?> activityThread = Class.forName("android.app.ActivityThread");
-                Method currentApplication =
-                        activityThread.getDeclaredMethod("currentApplication");
-                currentApplication.setAccessible(true);
-                Object application = currentApplication.invoke(null);
-                return application instanceof Context ? (Context) application : null;
+                Method currentThread = activityThread.getDeclaredMethod("currentActivityThread");
+                currentThread.setAccessible(true);
+                Object thread = currentThread.invoke(null);
+                if (thread == null) {
+                    return null;
+                }
+                Method systemContext = activityThread.getDeclaredMethod("getSystemContext");
+                systemContext.setAccessible(true);
+                Object value = systemContext.invoke(thread);
+                return value instanceof Context ? (Context) value : null;
             } catch (Throwable t) {
                 return null;
             }
@@ -237,14 +203,19 @@ public final class GestureBarHook {
             }
             boolean result = true;
             try {
-                Resources resources = current.getResources();
-                int id = resources.getIdentifier(
-                        "config_navBarInteractionMode", "integer", "android");
-                // 0 = 三键导航，1 = 双键导航；读不到时按手势导航处理，避免新 ROM 直接失效。
-                int mode = id == 0 ? -1 : resources.getInteger(id);
+                // HyperOS 4 的桌面原生手势运行时以 Settings.Secure.navigation_mode 为准：
+                // 0 = 三键导航，1 = 双键导航，2 = 手势导航。
+                int mode = android.provider.Settings.Secure.getInt(
+                        current.getContentResolver(), "navigation_mode", -1);
+                if (mode < 0) {
+                    Resources resources = current.getResources();
+                    int id = resources.getIdentifier(
+                            "config_navBarInteractionMode", "integer", "android");
+                    mode = id == 0 ? -1 : resources.getInteger(id);
+                }
                 result = mode != 0 && mode != 1;
             } catch (Throwable ignored) {
-                // 保持默认按手势导航处理。
+                // 读不到时按手势导航处理，避免新 ROM 直接失效。
             }
             gestureNavigation = result;
             return result;
@@ -252,9 +223,12 @@ public final class GestureBarHook {
 
         private static boolean isKeyguardLocked(Context current) {
             try {
-                KeyguardManager keyguardManager =
-                        (KeyguardManager) current.getSystemService(Context.KEYGUARD_SERVICE);
-                return keyguardManager != null && keyguardManager.isKeyguardLocked();
+                Object keyguard = current.getSystemService(Context.KEYGUARD_SERVICE);
+                if (keyguard == null) {
+                    return false;
+                }
+                Method locked = keyguard.getClass().getMethod("isKeyguardLocked");
+                return Boolean.TRUE.equals(locked.invoke(keyguard));
             } catch (Throwable t) {
                 return false;
             }
@@ -298,18 +272,6 @@ public final class GestureBarHook {
                     ViewConfiguration.getLongPressTimeout());
         }
 
-        private static void launchEta(Context current) {
-            try {
-                Intent intent = new Intent(Intent.ACTION_ASSIST)
-                        .setClassName(Constants.ETA_PACKAGE, Constants.ETA_ASSIST_ACTIVITY)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                                | Intent.FLAG_ACTIVITY_NO_ANIMATION);
-                current.startActivity(intent);
-            } catch (Throwable t) {
-                log(module, "启动 Eta 助手失败（确认 Eta 已安装）", t);
-            }
-        }
-
         private static final class Geometry {
             final int height;
             final float top;
@@ -317,6 +279,51 @@ public final class GestureBarHook {
             Geometry(int height, float top) {
                 this.height = height;
                 this.top = top;
+            }
+        }
+
+        /** 单个接收通道的去重水位线与双击识别器。 */
+        private static final class StreamState {
+            private static final int RECENT_EVENTS = 12;
+
+            final DoubleTapDetector detector;
+            private long lastEventTime = Long.MIN_VALUE;
+            private final long[] recentTimes = new long[RECENT_EVENTS];
+            private final int[] recentActions = new int[RECENT_EVENTS];
+            private final int[] recentXBits = new int[RECENT_EVENTS];
+            private final int[] recentYBits = new int[RECENT_EVENTS];
+            private int recentIndex;
+            private int recentCount;
+
+            StreamState(DoubleTapDetector detector) {
+                this.detector = detector;
+                java.util.Arrays.fill(recentTimes, Long.MIN_VALUE);
+            }
+
+            boolean isDuplicate(MotionEvent event) {
+                long time = event.getEventTime();
+                int action = event.getActionMasked();
+                int xBits = Float.floatToRawIntBits(event.getRawX());
+                int yBits = Float.floatToRawIntBits(event.getRawY());
+                if (time < lastEventTime) {
+                    return true;
+                }
+                for (int i = 0; i < recentCount; i++) {
+                    if (recentTimes[i] == time && recentActions[i] == action
+                            && recentXBits[i] == xBits && recentYBits[i] == yBits) {
+                        return true;
+                    }
+                }
+                recentTimes[recentIndex] = time;
+                recentActions[recentIndex] = action;
+                recentXBits[recentIndex] = xBits;
+                recentYBits[recentIndex] = yBits;
+                recentIndex = (recentIndex + 1) % RECENT_EVENTS;
+                if (recentCount < RECENT_EVENTS) {
+                    recentCount++;
+                }
+                lastEventTime = time;
+                return false;
             }
         }
     }

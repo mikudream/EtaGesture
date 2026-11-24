@@ -59,6 +59,10 @@ final class DoubleTapDetector {
             case MotionEvent.ACTION_UP:
                 return completeTap(eventTime, x, y, pointerCount, inGestureBar);
             case MotionEvent.ACTION_CANCEL:
+                // 桌面的手势识别会向部分事件流插入 CANCEL，某些流只收到 DOWN+CANCEL 而没有 UP。
+                // 未移动且时长在阈值内的 CANCEL 视作这次点击的释放；同一触摸的后续 UP 因
+                // pressed 已复位而不会重复计数。
+                return completeTap(eventTime, x, y, pointerCount, inGestureBar);
             case MotionEvent.ACTION_POINTER_DOWN:
             case MotionEvent.ACTION_POINTER_UP:
                 resetPress();
