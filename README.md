@@ -4,7 +4,7 @@
 
 - **双击小白条** → 唤出 **Eta 助手浮窗**（与长按电源键唤出同一个界面）
 
-这是一个**独立**的 libxposed API 102 模块，不修改 Eta 本体；Eta 保持官方版本即可。若希望双击时不会把 Eta 主界面所在任务带到前台，可使用把助手桥接 Activity 改为空 `taskAffinity` 独立任务的 Eta 构建（本工作区 `D:\DSH\Eta` 已包含这一行修复）。
+这是一个**独立**的 libxposed API 102 模块，不修改 Eta 本体；Eta 保持官方版本即可。首选路径通过系统助理会话直接唤出浮窗，不依赖 Eta 的 Activity；只有会话不可用时才回退启动 Eta 的 ASSIST 桥接 Activity。
 
 ![设置页](docs/screenshot.png)
 
