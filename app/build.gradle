@@ -1,0 +1,48 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'io.github.mangi.etagesture'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "io.github.mangi.etagesture"
+        minSdk 34
+        targetSdk 36
+        versionCode 1
+        versionName "1.0.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packaging {
+        resources {
+            // libxposed 模块声明必须保留在 APK 根目录。
+            merges += 'META-INF/xposed/*'
+        }
+    }
+
+    testOptions {
+        unitTests.all {
+            it.testLogging { events "failed" }
+        }
+    }
+}
+
+dependencies {
+    // libxposed API 102 的三个 jar 随仓库提供，避免 AAR 元数据要求 compileSdk 37。
+    compileOnly files('libs/libxposed/api.jar')
+    implementation files('libs/libxposed/interface.jar')
+    implementation files('libs/libxposed/service.jar')
+    testImplementation 'junit:junit:4.13.2'
+}
