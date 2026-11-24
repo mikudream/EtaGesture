@@ -13,6 +13,9 @@ public final class Constants {
     /** 双击手势条开关。 */
     public static final String KEY_ENABLED = "enabled";
 
+    /** 唤醒成功后的震动反馈开关。 */
+    public static final String KEY_VIBRATE = "vibrate";
+
     public static final String SYSTEM_UI_PACKAGE = "com.android.systemui";
 
     public static final String ETA_PACKAGE = "io.github.mangi.eta";

@@ -4,6 +4,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.service.voice.VoiceInteractionSession;
 import android.util.Log;
 
@@ -18,17 +21,20 @@ import io.github.libxposed.api.XposedModule;
  * 首选与长按电源键完全相同的路径：通过 `voiceinteraction` Binder 调
  * `showSessionForActiveService`，由系统直接显示 Eta 的助理会话；
  * 失败时回退为启动 Eta 的 ASSIST 桥接 Activity。system_server 的启动不受
- * 第三方应用后台启动限制影响。
+ * 第三方应用后台启动限制影响。唤醒成功后按开关短震一次作为反馈。
  */
 final class EtaWake {
     private EtaWake() {
     }
 
-    static void launch(Context context, XposedModule module) {
-        if (showAssistantSession(module)) {
-            return;
+    static void launch(Context context, XposedModule module, boolean vibrate) {
+        boolean shown = showAssistantSession(module);
+        if (!shown) {
+            shown = startAssistActivity(context, module);
         }
-        startAssistActivity(context, module);
+        if (shown && vibrate) {
+            vibrate(context, module);
+        }
     }
 
     private static boolean showAssistantSession(XposedModule module) {
@@ -88,7 +94,7 @@ final class EtaWake {
         }
     }
 
-    private static void startAssistActivity(Context context, XposedModule module) {
+    private static boolean startAssistActivity(Context context, XposedModule module) {
         try {
             Intent intent = new Intent(Intent.ACTION_ASSIST)
                     .setClassName(Constants.ETA_PACKAGE, Constants.ETA_ASSIST_ACTIVITY)
@@ -96,8 +102,26 @@ final class EtaWake {
                             | Intent.FLAG_ACTIVITY_NO_ANIMATION);
             context.startActivity(intent);
             log(module, "已启动 Eta ASSIST 桥接 Activity", null);
+            return true;
         } catch (Throwable t) {
             log(module, "启动 Eta 助手失败（确认 Eta 已安装）", t);
+            return false;
+        }
+    }
+
+    /** 唤醒成功后的轻触反馈；震动不可用时只记录日志。 */
+    private static void vibrate(Context context, XposedModule module) {
+        try {
+            VibratorManager manager = context.getSystemService(VibratorManager.class);
+            Vibrator vibrator = manager != null
+                    ? manager.getDefaultVibrator()
+                    : context.getSystemService(Vibrator.class);
+            if (vibrator == null || !vibrator.hasVibrator()) {
+                return;
+            }
+            vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK));
+        } catch (Throwable t) {
+            log(module, "震动反馈失败", t);
         }
     }
 

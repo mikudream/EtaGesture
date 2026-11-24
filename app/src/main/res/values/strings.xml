@@ -3,8 +3,14 @@
     <string name="app_name">Eta 手势</string>
     <string name="settings_subtitle">双击手势导航条，唤出 Eta 助手浮窗</string>
     <string name="settings_toggle">启用手势条双击</string>
+    <string name="settings_vibrate">唤醒后震动反馈</string>
+    <string name="settings_hide_icon">隐藏桌面图标</string>
+    <string name="settings_hide_icon_summary">隐藏后如需再次打开设置：\nadb shell am start -n io.github.mangi.etagesture/.SettingsActivity</string>
     <string name="settings_status_connected">LSPosed 已连接，开关立即生效</string>
     <string name="settings_status_disconnected">LSPosed 未连接：请在 LSPosed 中启用本模块并重启手机</string>
     <string name="settings_write_failed">写入失败</string>
+    <string name="hide_icon_confirm_title">隐藏桌面图标？</string>
+    <string name="hide_icon_confirm_message">桌面图标会消失，双击手势条与模块功能不受影响。\n\n之后可执行以下命令重新打开设置：\n\nadb shell am start -n io.github.mangi.etagesture/.SettingsActivity</string>
+    <string name="hidden_toast">已隐藏桌面图标</string>
     <string name="settings_hint">需要 Eta 为默认数字助理，或已授予 Eta 悬浮窗权限，否则双击可能没有可见界面。\n\nLSPosed 作用域只需勾选 system（system_server）；修改开关后下一次双击立即生效。\n日志标签：[EtaGesture]</string>
 </resources>

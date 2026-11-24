@@ -174,7 +174,9 @@ public final class GestureBarHook {
                 lastTriggerUptime = now;
                 log(module, "手势条双击，唤出 Eta 助手浮窗", null);
                 Context launchContext = current;
-                MAIN.post(() -> EtaWake.launch(launchContext, module));
+                boolean vibrate = preferences == null
+                        || preferences.getBoolean(Constants.KEY_VIBRATE, true);
+                MAIN.post(() -> EtaWake.launch(launchContext, module, vibrate));
             }
         }
 

@@ -10,10 +10,12 @@
 
 ## 功能
 
-- 在 SystemUI 进程旁路观察输入事件，只在底部手势条区域识别双击，不消费触摸、不改变系统手势。
+- 在 system_server 进程旁路观察输入事件，只在底部手势条区域识别双击，不消费触摸、不改变系统手势。
 - 判定条件：单指、按下与抬起都在手势条区域、位移不超过触摸阈值、时长不超过长按阈值；第二下与第一下抬手的间隔、两次落点距离受系统双击阈值约束。
 - 三键/双键导航、锁屏、开关关闭时不触发；多指、滑动、取消都会作废当前按压。
 - 识别后先通过 `voiceinteraction` Binder 调 `showSessionForActiveService`，由系统直接显示 Eta 助理会话（与长按电源键一致）；失败时回退向 `io.github.mangi.eta/io.github.mangi.eta.agent.voice.EtaVoiceAssistActivity` 发送 `ACTION_ASSIST`。
+- **唤醒后震动反馈**：会话成功显示或 Activity 启动成功后短震一次，可在设置页关闭。
+- **隐藏桌面图标**：设置页可隐藏/恢复桌面图标，隐藏后双击与模块功能不受影响。
 - 设置页开关实时生效（RemotePreferences），无需重启；日志标签 `[EtaGesture]`。
 
 ## 为什么在 system_server 里做
@@ -54,7 +56,18 @@ system_server 内完成电源键与系统入口接管。
    | `system` | 观察 system_server 手势监视器输入并唤出 Eta 助理会话 |
 
 4. 重启手机
-5. 打开「Eta 手势」确认状态为「LSPosed 已连接」，按需开关
+5. 打开「Eta 手势」确认状态为「LSPosed 已连接」，按需开关双击、震动与桌面图标
+
+### 隐藏桌面图标
+
+设置页打开「隐藏桌面图标」并确认后，桌面图标立即消失（双击手势条与模块功能不受影响）。
+如需再次打开设置，执行：
+
+```text
+adb shell am start -n io.github.mangi.etagesture/.SettingsActivity
+```
+
+设置页里再关闭该开关即可恢复图标；隐藏状态会保存在本机，应用升级后保持。
 
 ## 实机验证
 
@@ -66,6 +79,8 @@ Redmi K90 Pro Max（HyperOS 4 / OS4.0.6.0.XPMCNXM，Android 17）：
 | 双击手势条 | 触发一次，Eta 助手浮窗覆盖当前应用（不切换任务） |
 | 连续多次双击 | 每次双击各触发一次 |
 | 会话路径日志 | `已通过助理会话唤出 Eta` |
+| 震动反馈 | `dumpsys vibrator_manager` 的 Recent vibrations 中每次唤醒都出现 `android (uid=1000) | usage: TOUCH | Prebaked=CLICK` |
+| 隐藏桌面图标 | 隐藏后 `cmd package query-activities` 不再解析到本应用；关闭开关后恢复 |
 
 ![双击唤出 Eta 助手浮窗](docs/overlay.png)
 
